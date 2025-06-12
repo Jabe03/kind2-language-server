@@ -16,6 +16,7 @@ import java.util.stream.Collectors;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 import org.eclipse.lsp4j.ConfigurationItem;
 import org.eclipse.lsp4j.ConfigurationParams;
@@ -433,7 +434,12 @@ public class Kind2LanguageServer
 
           // Add realizability info
           RealizabilityResult res = analysis.getRealizabilityResult();
-          json = json.substring(0, json.length() - 2) + ",\"realizabilityResult\": " + "\"" + res.toString() + "\"" + '}';
+          json = json.substring(0, json.length() - 2) + 
+                  ",\n  \"realizabilityResult\": " + "\"" + res.toString() + "\"" + 
+                  (analysis.getContext().equals("contract")? 
+                  ",\n  " + getConflictingSetJSONElementOf(result.getJson()):
+                  "") +
+                  '}';
           analyses.add(json);
         }
         String json = "{\"name\": \"" + entry.getKey() + "\",\"analyses\": "
@@ -442,6 +448,30 @@ public class Kind2LanguageServer
       }
       return nodeResults;
     });
+  }
+
+  private String getConflictingSetJSONElementOf(String json){
+    String conflictingSetJson = "";
+      for(JsonElement jele: JsonParser.parseString(json).getAsJsonArray()){
+         
+            if(jele.getAsJsonObject().get("objectType").getAsString().equals("realizabilityCheck") &&
+                jele.getAsJsonObject().get("conflictingSet") != null) {
+                  if(!conflictingSetJson.equals("")) {
+                    client.logMessage(
+                        new MessageParams(MessageType.Warning,
+                         "Found multiple conflicting sets in the result. Only the first one will be used."));
+                  }else{
+                  conflictingSetJson = (jele.getAsJsonObject().get("conflictingSet")
+                                        .getAsJsonObject().get("nodes").toString());
+                  }
+               }
+              
+            }
+            if(conflictingSetJson.equals("")) {
+              return "\"conflictingSet\": []";
+            }
+            conflictingSetJson = "\"conflictingSet\": " + conflictingSetJson;
+      return conflictingSetJson;
   }
 
   @JsonRequest(value = "kind2/counterExample", useSegment = false)
