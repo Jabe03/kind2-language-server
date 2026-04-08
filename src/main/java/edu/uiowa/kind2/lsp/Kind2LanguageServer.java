@@ -266,7 +266,8 @@ public class Kind2LanguageServer
       if (parseResults.containsKey(uri)) {
         try {
           for (AstInfo info : parseResults.get(uri).getAstInfos()) {
-            if (info instanceof NodeInfo || info instanceof FunctionInfo || info instanceof TypeDeclInfo) {
+            if (info instanceof NodeInfo || info instanceof FunctionInfo || info instanceof TypeDeclInfo || info instanceof ConstDeclInfo) {
+              client.logMessage(new MessageParams(MessageType.Info, info.getJson()));
               components.add(replacePathWithUri(info.getJson(), uri,
                   info.getFile() == null ? new URI(uri).getPath()
                       : info.getFile()));
@@ -282,7 +283,7 @@ public class Kind2LanguageServer
   }
 
   @JsonRequest(value = "kind2/minimalCutSet", useSegment = false)
-  public CompletableFuture<List<String>> minimalCutSet(String uri, String name) {
+  public CompletableFuture<List<String>> minimalCutSet(String uri, String name, String compKind) {
     return CompletableFutures.computeAsync(cancelToken -> {
       client.logMessage(new MessageParams(MessageType.Info,
           "Checking minimal cut sets of component " + name + " in " + uri + "..."));
@@ -303,7 +304,7 @@ public class Kind2LanguageServer
         if (workingDirectory == null) {
           workingDirectory = client.workspaceFolders().get().get(0).getUri();
         }
-        Kind2Api api = getCheckKind2Api(name, false);
+        Kind2Api api = getCheckKind2Api(name, compKind);
         api.enable(Module.MCS);
         api.includeDir(Paths.get(new URI(uri)).getParent().toString());
         String filepath = computeRelativeFilepath(workingDirectory, uri);
@@ -356,7 +357,7 @@ public class Kind2LanguageServer
   }
 
   @JsonRequest(value = "kind2/check", useSegment = false)
-  public CompletableFuture<List<String>> check(String uri, String name) {
+  public CompletableFuture<List<String>> check(String uri, String name, String compKind) {
     return CompletableFutures.computeAsync(cancelToken -> {
       client.logMessage(new MessageParams(MessageType.Info,
           "Checking component " + name + " in " + uri + "..."));
@@ -377,7 +378,7 @@ public class Kind2LanguageServer
         if (workingDirectory == null) {
           workingDirectory = client.workspaceFolders().get().get(0).getUri();
         }
-        Kind2Api api = getCheckKind2Api(name, false);
+        Kind2Api api = getCheckKind2Api(name, compKind);
         api.includeDir(Paths.get(new URI(uri)).getParent().toString());
         String filepath = computeRelativeFilepath(workingDirectory, uri);
         api.setFakeFilepath(filepath);
@@ -459,7 +460,7 @@ public class Kind2LanguageServer
   }
 
   @JsonRequest(value = "kind2/realizability", useSegment = false)
-  public CompletableFuture<List<String>> realizability(String uri, String name, boolean typeDecl) {
+  public CompletableFuture<List<String>> realizability(String uri, String name, String compKind) {
     return CompletableFutures.computeAsync(cancelToken -> {
       client.logMessage(new MessageParams(MessageType.Info,
           "Checking realizability of component " + name + " in " + uri + "..."));
@@ -480,7 +481,7 @@ public class Kind2LanguageServer
         if (workingDirectory == null) {
           workingDirectory = client.workspaceFolders().get().get(0).getUri();
         }
-        Kind2Api api = getCheckKind2Api(name, typeDecl);
+        Kind2Api api = getCheckKind2Api(name, compKind);
         api.includeDir(Paths.get(new URI(uri)).getParent().toString());
         String filepath = computeRelativeFilepath(workingDirectory, uri);
         api.setFakeFilepath(filepath);
@@ -830,7 +831,7 @@ private MCSCategory stringToMCSCategory(String cat){
     return api;
   }
 
-  public Kind2Api getCheckKind2Api(String name, boolean typeDecl)
+  public Kind2Api getCheckKind2Api(String name, String compKind)
       throws InterruptedException, ExecutionException {
     ConfigurationItem kind2Options = new ConfigurationItem();
     kind2Options.setSection("kind2");
@@ -915,10 +916,19 @@ private MCSCategory stringToMCSCategory(String cat){
       otherOptions.add(option.getAsString());
     }
     api.setOtherOptions(otherOptions);
-    if (typeDecl) {
-      api.setLusMainType(name);
-    } else {
-      api.setLusMain(name);
+    switch(compKind){
+      case "paramDecl":
+      case "constDecl":
+        api.setLusMainConst(name);
+        break;
+      case "nodeDecl":
+        api.setLusMain(name);
+        break;
+      case "typeDecl":
+        api.setLusMainType(name);
+        break;
+      default:
+        throw new RuntimeException("Component kind must be of the type \"constDecl\",\"paramDecl\",\"typeDecl\", or \"nodeDecl\". Got " + compKind);
     }
     return api;
   }
@@ -945,7 +955,7 @@ private MCSCategory stringToMCSCategory(String cat){
   public CompletableFuture<List<String>> getKind2Cmd(String uri, String main) {
     return CompletableFuture.supplyAsync(() -> {
       try {
-        Kind2Api api = getCheckKind2Api(main, false);
+        Kind2Api api = getCheckKind2Api(main, "nodeDecl");
         List<String> cmd = api.getOptions();
         cmd.set(0, Kind2Api.KIND2);
         cmd.add(new URI(uri).getPath());
