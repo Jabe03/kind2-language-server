@@ -4,8 +4,8 @@ import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -15,11 +15,6 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
-
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 
 import org.eclipse.lsp4j.ConfigurationItem;
 import org.eclipse.lsp4j.ConfigurationParams;
@@ -61,16 +56,22 @@ import org.eclipse.lsp4j.services.LanguageClientAware;
 import org.eclipse.lsp4j.services.TextDocumentService;
 import org.eclipse.lsp4j.services.WorkspaceService;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
 import edu.uiowa.cs.clc.kind2.Kind2Exception;
 import edu.uiowa.cs.clc.kind2.api.IProgressMonitor;
+import edu.uiowa.cs.clc.kind2.api.ITPSolverOption;
+import edu.uiowa.cs.clc.kind2.api.IVCCategory;
 import edu.uiowa.cs.clc.kind2.api.Kind2Api;
 import edu.uiowa.cs.clc.kind2.api.LogLevel;
 import edu.uiowa.cs.clc.kind2.api.MCSCategory;
 import edu.uiowa.cs.clc.kind2.api.Module;
-import edu.uiowa.cs.clc.kind2.api.SolverOption;
 import edu.uiowa.cs.clc.kind2.api.QESolverOption;
-import edu.uiowa.cs.clc.kind2.api.ITPSolverOption;
-import edu.uiowa.cs.clc.kind2.api.IVCCategory;
+import edu.uiowa.cs.clc.kind2.api.ResultListener;
+import edu.uiowa.cs.clc.kind2.api.SolverOption;
 import edu.uiowa.cs.clc.kind2.results.Analysis;
 import edu.uiowa.cs.clc.kind2.results.AstInfo;
 import edu.uiowa.cs.clc.kind2.results.ConstDeclInfo;
@@ -81,10 +82,9 @@ import edu.uiowa.cs.clc.kind2.results.Log;
 import edu.uiowa.cs.clc.kind2.results.NodeInfo;
 import edu.uiowa.cs.clc.kind2.results.NodeResult;
 import edu.uiowa.cs.clc.kind2.results.Property;
-import edu.uiowa.cs.clc.kind2.results.Result;
 import edu.uiowa.cs.clc.kind2.results.RealizabilityResult;
+import edu.uiowa.cs.clc.kind2.results.Result;
 import edu.uiowa.cs.clc.kind2.results.TypeDeclInfo;
-import edu.uiowa.cs.clc.kind2.api.ResultListener;
 
 /**
  * LanguageServer
@@ -988,16 +988,17 @@ private MCSCategory stringToMCSCategory(String cat){
 
   @JsonRequest(value = "kind2/interpret", useSegment = false)
   public CompletableFuture<String> interpret(String uri, String main,
-      String json) {
+      String json, int steps) {
     return CompletableFuture.supplyAsync(() -> {
       try {
         Kind2Api api = getPresetKind2Api();
         api.includeDir(Paths.get(new URI(uri)).getParent().toString());
         String filepath = computeRelativeFilepath(workingDirectory, uri);
         api.setFakeFilepath(filepath);
-        return api.interpret(getText(uri), main, json);
+        return api.interpret(getText(uri), main, json, steps);
       } catch (URISyntaxException | InterruptedException
           | ExecutionException | IOException e) {
+            client.logMessage(new MessageParams(MessageType.Error, "Error thrown: " + e.getMessage()));
         throw new ResponseErrorException(new ResponseError(
             ResponseErrorCode.InternalError, e.getMessage(), e));
       }
