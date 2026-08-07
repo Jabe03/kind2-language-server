@@ -5,6 +5,7 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -358,7 +359,7 @@ public class Kind2LanguageServer
             List<String> json = handleMCSResult(result, uri);
             client.minimalCutSetResultUpdate(uri, name,json);
           } 
-        };
+      };
 
       try {
         if (workingDirectory == null) {
@@ -1042,16 +1043,17 @@ private MCSCategory stringToMCSCategory(String cat){
 
   @JsonRequest(value = "kind2/interpret", useSegment = false)
   public CompletableFuture<String> interpret(String uri, String main,
-      String json) {
+      String json, int steps) {
     return CompletableFuture.supplyAsync(() -> {
       try {
         Kind2Api api = getPresetKind2Api();
         // api.includeDir(Paths.get(new URI(uri)).getParent().toString());
         // String filepath = computeRelativeFilepath(workingDirectory, uri);
         // api.setFakeFilepath(filepath);
-        return api.interpret(getText(uri), main, json);
+        return api.interpret(getText(uri), main, json, steps);
       } catch (URISyntaxException | InterruptedException
           | ExecutionException | IOException e) {
+            client.logMessage(new MessageParams(MessageType.Error, "Error thrown: " + e.getMessage()));
         throw new ResponseErrorException(new ResponseError(
             ResponseErrorCode.InternalError, e.getMessage(), e));
       }
