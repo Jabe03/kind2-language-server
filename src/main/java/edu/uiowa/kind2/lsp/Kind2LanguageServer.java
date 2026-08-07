@@ -173,11 +173,11 @@ public class Kind2LanguageServer
    * @param workingDirectory the current working directory
    * @param uri the uri of the lustre file
    */
-  private String computeRelativeFilepath(String workingDirectory, String uri) {
-    return Paths.get(URI.create(workingDirectory)).relativize(
-                 Paths.get(URI.create(uri)))
-                 .toString();
-  }
+  // private String computeRelativeFilepath(String workingDirectory, String uri) {
+  //   return Paths.get(URI.create(workingDirectory)).relativize(
+  //                Paths.get(URI.create(uri)))
+  //                .toString();
+  // }
   
   /**
    * Call Kind 2 to parse a lustre file and check for syntax errors.
@@ -366,9 +366,9 @@ public class Kind2LanguageServer
         }
         Kind2Api api = getCheckKind2Api(name, compKind);
         api.enable(Module.MCS);
-        api.includeDir(Paths.get(new URI(uri)).getParent().toString());
-        String filepath = computeRelativeFilepath(workingDirectory, uri);
-        api.setFakeFilepath(filepath);
+        // api.includeDir(Paths.get(new URI(uri)).getParent().toString());
+        // String filepath = computeRelativeFilepath(workingDirectory, uri);
+        // api.setFakeFilepath(filepath);
         api.execute(getText(uri), 
                             result, 
                             monitor,
@@ -444,8 +444,9 @@ public class Kind2LanguageServer
           workingDirectory = client.workspaceFolders().get().get(0).getUri();
         }
         Kind2Api api = getCheckKind2Api(name, compKind);
-        api.includeDir(Paths.get(new URI(uri)).getParent().toString());
-        String filepath = computeRelativeFilepath(workingDirectory, uri);
+        // api.includeDir(Paths.get(new URI(uri)).getParent().toString());
+        // String filepath = computeRelativeFilepath(workingDirectory, uri);
+        // api.setFakeFilepath(filepath);
 
         ResultListener listener = new ResultListener() {
           public void onUpdate(Result result){
@@ -454,7 +455,6 @@ public class Kind2LanguageServer
           } 
         };
 
-        api.setFakeFilepath(filepath);
         api.execute(getText(uri), 
                             result, 
                             monitor,
@@ -567,9 +567,9 @@ public class Kind2LanguageServer
           workingDirectory = client.workspaceFolders().get().get(0).getUri();
         }
         Kind2Api api = getCheckKind2Api(name, compKind);
-        api.includeDir(Paths.get(new URI(uri)).getParent().toString());
-        String filepath = computeRelativeFilepath(workingDirectory, uri);
-        api.setFakeFilepath(filepath);
+        // api.includeDir(Paths.get(new URI(uri)).getParent().toString());
+        // String filepath = computeRelativeFilepath(workingDirectory, uri);
+        // api.setFakeFilepath(filepath);
         api.enable(Module.CONTRACTCK);
         api.execute(getText(uri), 
                             result, 
@@ -901,7 +901,7 @@ private MCSCategory stringToMCSCategory(String cat){
     JsonObject configs = (JsonObject) this.client
         .configuration(new ConfigurationParams(Arrays.asList(kind2Options)))
         .get().get(0);
-    String workspace_path = configs.get("kind2_path").getAsString(); 
+    String workspace_path = "/home/josh/Kind2/kind2-language-server/kind2";
     if (workspace_path.equals("")) {
       Kind2Api.KIND2 = client.getDefaultKind2Path().get();
     } else {
@@ -1046,9 +1046,9 @@ private MCSCategory stringToMCSCategory(String cat){
     return CompletableFuture.supplyAsync(() -> {
       try {
         Kind2Api api = getPresetKind2Api();
-        api.includeDir(Paths.get(new URI(uri)).getParent().toString());
-        String filepath = computeRelativeFilepath(workingDirectory, uri);
-        api.setFakeFilepath(filepath);
+        // api.includeDir(Paths.get(new URI(uri)).getParent().toString());
+        // String filepath = computeRelativeFilepath(workingDirectory, uri);
+        // api.setFakeFilepath(filepath);
         return api.interpret(getText(uri), main, json);
       } catch (URISyntaxException | InterruptedException
           | ExecutionException | IOException e) {
