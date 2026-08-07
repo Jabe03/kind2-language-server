@@ -85,6 +85,7 @@ import edu.uiowa.cs.clc.kind2.results.Property;
 import edu.uiowa.cs.clc.kind2.results.RealizabilityResult;
 import edu.uiowa.cs.clc.kind2.results.Result;
 import edu.uiowa.cs.clc.kind2.results.TypeDeclInfo;
+import edu.uiowa.cs.clc.kind2.api.ResultListener;
 
 /**
  * LanguageServer
@@ -308,6 +309,15 @@ public class Kind2LanguageServer
             client.minimalCutSetResultUpdate(uri, name,json);
           } 
         };
+        }
+      };
+
+      ResultListener listener = new ResultListener() {
+          public void onUpdate(Result result){
+            List<String> json = handleMCSResult(result, uri);
+            client.minimalCutSetResultUpdate(uri, name,json);
+          } 
+        };
 
       try {
         if (workingDirectory == null) {
@@ -334,7 +344,8 @@ public class Kind2LanguageServer
         // Throw an exception for the launcher to handle.
         cancelToken.checkCanceled();
       }
-      return handleCheckResult(result, uri);
+      client.minimalCutSetComplete(uri, name);
+      return handleMCSResult(result, uri);
     });
   }
 
@@ -536,6 +547,7 @@ public class Kind2LanguageServer
         // Throw an exception for the launcher to handle.
         cancelToken.checkCanceled();
       }
+      client.realizabilityComplete(uri, name);
       return handleRealizabilityResult(result, uri);
       
     });
@@ -567,11 +579,13 @@ public class Kind2LanguageServer
           String json = analysis.getJson();
 
           // Add realizability info
+          json = json.substring(0, json.length() - 2) ;
           RealizabilityResult res = analysis.getRealizabilityResult();
           if (res != null){
-            json = json.substring(0, json.length() - 2) + ",\"realizabilityResult\": " + "\"" + res.toString() + "\" ,"+ getConflictingSetOf(result, analysis.getContext())  + '}';
-            analyses.add(json);
+            json = json + ",\"realizabilityResult\": " + "\"" + res.toString() + "\" ,"+ getConflictingSetOf(result, analysis.getContext()) ;
           }
+          json += '}';
+          analyses.add(json);
         }
         String json = "{\"name\": \"" + entry.getKey() + "\",\"analyses\": "
             + analyses.toString() + "}";
