@@ -4,8 +4,8 @@ import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -15,11 +15,6 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
-
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 
 import org.eclipse.lsp4j.ConfigurationItem;
 import org.eclipse.lsp4j.ConfigurationParams;
@@ -46,6 +41,7 @@ import org.eclipse.lsp4j.PublishDiagnosticsParams;
 import org.eclipse.lsp4j.Range;
 import org.eclipse.lsp4j.SaveOptions;
 import org.eclipse.lsp4j.ServerCapabilities;
+import org.eclipse.lsp4j.SetTraceParams;
 import org.eclipse.lsp4j.SymbolInformation;
 import org.eclipse.lsp4j.SymbolKind;
 import org.eclipse.lsp4j.TextDocumentSyncKind;
@@ -61,16 +57,22 @@ import org.eclipse.lsp4j.services.LanguageClientAware;
 import org.eclipse.lsp4j.services.TextDocumentService;
 import org.eclipse.lsp4j.services.WorkspaceService;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
 import edu.uiowa.cs.clc.kind2.Kind2Exception;
 import edu.uiowa.cs.clc.kind2.api.IProgressMonitor;
+import edu.uiowa.cs.clc.kind2.api.ITPSolverOption;
+import edu.uiowa.cs.clc.kind2.api.IVCCategory;
 import edu.uiowa.cs.clc.kind2.api.Kind2Api;
 import edu.uiowa.cs.clc.kind2.api.LogLevel;
 import edu.uiowa.cs.clc.kind2.api.MCSCategory;
 import edu.uiowa.cs.clc.kind2.api.Module;
-import edu.uiowa.cs.clc.kind2.api.SolverOption;
 import edu.uiowa.cs.clc.kind2.api.QESolverOption;
-import edu.uiowa.cs.clc.kind2.api.ITPSolverOption;
-import edu.uiowa.cs.clc.kind2.api.IVCCategory;
+import edu.uiowa.cs.clc.kind2.api.ResultListener;
+import edu.uiowa.cs.clc.kind2.api.SolverOption;
 import edu.uiowa.cs.clc.kind2.results.Analysis;
 import edu.uiowa.cs.clc.kind2.results.AstInfo;
 import edu.uiowa.cs.clc.kind2.results.ConstDeclInfo;
@@ -81,10 +83,9 @@ import edu.uiowa.cs.clc.kind2.results.Log;
 import edu.uiowa.cs.clc.kind2.results.NodeInfo;
 import edu.uiowa.cs.clc.kind2.results.NodeResult;
 import edu.uiowa.cs.clc.kind2.results.Property;
-import edu.uiowa.cs.clc.kind2.results.Result;
 import edu.uiowa.cs.clc.kind2.results.RealizabilityResult;
+import edu.uiowa.cs.clc.kind2.results.Result;
 import edu.uiowa.cs.clc.kind2.results.TypeDeclInfo;
-import edu.uiowa.cs.clc.kind2.api.ResultListener;
 
 /**
  * LanguageServer
@@ -196,9 +197,9 @@ public class Kind2LanguageServer
       if (api == null) return;
       api.setOnlyParse(true);
       api.setLsp(true);
-      String filepath = computeRelativeFilepath(workingDirectory, uri);
-      api.setFakeFilepath(filepath);
-      api.includeDir(Paths.get(new URI(uri)).getParent().toString());
+      // String filepath = computeRelativeFilepath(workingDirectory, uri);
+      // api.setFakeFilepath(filepath);
+      // api.includeDir(Paths.get(new URI(uri)).getParent().toString());
       parseResults.put(uri, api.execute(getText(uri)));
     } catch (Kind2Exception | URISyntaxException | IOException
         | InterruptedException | ExecutionException e) {
@@ -243,27 +244,54 @@ public class Kind2LanguageServer
         .logMessage(new MessageParams(MessageType.Info, "Server initialized."));
   }
 
+  @Override
+  public void setTrace(SetTraceParams params) {
+    // Trace negotiation is optional for this server. Ignore it to avoid
+    // throwing UnsupportedOperationException from the default interface method.
+  }
+
   private String replacePathWithUri(String json, String mainUri, String path)
       throws URISyntaxException {
-    String uri = Paths.get(new URI(mainUri)).getParent().resolve(path)
-        .normalize().toUri().toString();
-    if (json.contains("\"file\":")) {
-      int l = json.indexOf("\"file\":");
-      int r = json.indexOf('\"', l + 9) + 1;
-      if (json.charAt(r) == ',') {
-        r += 1;
+    JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
+    URI base = new URI(mainUri);
+    URI resolved;
+
+    if (path == null || path.isBlank()) {
+      resolved = base;
+    } else {
+      URI candidate;
+      try {
+        candidate = new URI(path);
+      } catch (URISyntaxException e) {
+        candidate = null;
       }
-      json = json.replace(json.substring(l, r), "");
+
+      if (candidate != null && candidate.isAbsolute()) {
+        resolved = candidate;
+      } else {
+        // Resolve against the source document URI so remote and custom schemes work.
+        resolved = base.resolve(path);
+      }
     }
-    return json.substring(0, json.length() - 2) + ",\"file\": \"" + uri + "\"}";
+
+    obj.addProperty("file", resolved.normalize().toString());
+    return obj.toString();
   }
 
   /**
    * @return the components
    */
   @JsonRequest(value = "kind2/getComponents", useSegment = false)
-  public CompletableFuture<List<String>> getComponents(String uri) {
+  public CompletableFuture<List<String>> getComponents(JsonElement params) {
+    client.logMessage(new MessageParams(MessageType.Info, "Getting components..."));
     return CompletableFuture.supplyAsync(() -> {
+      String uri = extractSingleStringParam(params, "kind2/getComponents");
+
+      if (uri == null) {
+        throw new ResponseErrorException(new ResponseError(
+            ResponseErrorCode.InvalidParams, "Expected a single URI string parameter", null));
+      }
+
       List<String> components = new ArrayList<>();
       if (parseResults.containsKey(uri)) {
         try {
@@ -271,17 +299,41 @@ public class Kind2LanguageServer
             if (info instanceof NodeInfo || info instanceof FunctionInfo || info instanceof TypeDeclInfo || info instanceof ConstDeclInfo || info instanceof LemmaInfo) {
               client.logMessage(new MessageParams(MessageType.Info, info.getJson()));
               components.add(replacePathWithUri(info.getJson(), uri,
-                  info.getFile() == null ? new URI(uri).getPath()
-                      : info.getFile()));
+                  info.getFile()));
             }
           }
         } catch (URISyntaxException e) {
           throw new ResponseErrorException(new ResponseError(
-              ResponseErrorCode.ParseError, e.getMessage(), e));
+              ResponseErrorCode.InternalError, "Failed to resolve component URI: " + e.getMessage(), e));
         }
       }
       return components;
     });
+  }
+
+  private String extractSingleStringParam(JsonElement params, String methodName) {
+    if (params == null || params.isJsonNull()) {
+      return null;
+    }
+
+    if (params.isJsonPrimitive() && params.getAsJsonPrimitive().isString()) {
+      return params.getAsString();
+    }
+
+    if (params.isJsonArray()) {
+      JsonArray array = params.getAsJsonArray();
+      if (array.size() == 1) {
+        JsonElement first = array.get(0);
+        if (first != null && first.isJsonPrimitive() && first.getAsJsonPrimitive().isString()) {
+          return first.getAsString();
+        }
+      }
+    }
+
+    throw new ResponseErrorException(new ResponseError(
+        ResponseErrorCode.InvalidParams,
+        "Invalid parameters for " + methodName + ": expected a single string or a one-element array",
+        null));
   }
 
   @JsonRequest(value = "kind2/minimalCutSet", useSegment = false)
@@ -467,11 +519,10 @@ public class Kind2LanguageServer
           json = json.substring(0, json.length() - 2) + ",\"properties\": ";
           List<String> properties = analysis.getProperties().stream().map(p -> {
             try {
-              return replacePathWithUri(p.getJson(), uri,
-                  p.getFile() == null ? new URI(uri).getPath() : p.getFile());
+              return replacePathWithUri(p.getJson(), uri, p.getFile());
             } catch (URISyntaxException e) {
               throw new ResponseErrorException(new ResponseError(
-                  ResponseErrorCode.ParseError, e.getMessage(), e));
+                  ResponseErrorCode.InternalError, "Failed to resolve property URI: " + e.getMessage(), e));
             }
           }).collect(Collectors.toList());
           json = json + properties.toString() + 
