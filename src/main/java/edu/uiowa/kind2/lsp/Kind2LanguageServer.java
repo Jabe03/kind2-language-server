@@ -308,16 +308,7 @@ public class Kind2LanguageServer
             List<String> json = handleMCSResult(result, uri);
             client.minimalCutSetResultUpdate(uri, name,json);
           } 
-        };
-        }
       };
-
-      ResultListener listener = new ResultListener() {
-          public void onUpdate(Result result){
-            List<String> json = handleMCSResult(result, uri);
-            client.minimalCutSetResultUpdate(uri, name,json);
-          } 
-        };
 
       try {
         if (workingDirectory == null) {
