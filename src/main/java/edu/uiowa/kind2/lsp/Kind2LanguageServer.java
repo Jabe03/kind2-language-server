@@ -5,7 +5,6 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -113,7 +112,7 @@ public class Kind2LanguageServer
     if (openDocuments.containsKey(uri)) {
       return openDocuments.get(uri);
     }
-    return Files.readString(Paths.get(new URI(uri)));
+    throw new IOException("File not open: " + uri);
   }
 
   void checkLog(Result result) throws ResponseErrorException {
