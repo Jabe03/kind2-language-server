@@ -861,12 +861,26 @@ private MCSCategory stringToMCSCategory(String cat){
     JsonObject configs = (JsonObject) this.client
         .configuration(new ConfigurationParams(Arrays.asList(kind2Options)))
         .get().get(0);
-    String workspace_path = "/home/josh/Kind2/kind2-language-server/kind2";
-    if (workspace_path.equals("")) {
-      Kind2Api.KIND2 = client.getDefaultKind2Path().get();
-    } else {
-      Kind2Api.KIND2 = workspace_path;
+
+    String configuredPath = "";
+    if (configs.has("kind2_path") && !configs.get("kind2_path").isJsonNull()) {
+      configuredPath = configs.get("kind2_path").getAsString();
+      if (configuredPath.equals("")) {
+        configuredPath = client.getDefaultKind2Path().get();
+      }
     }
+
+    Path projectRootKind2 = Path.of(System.getProperty("user.dir"), "kind2");
+    if (configuredPath.isBlank() || configuredPath.startsWith("/static/devextensions/")) {
+      Kind2Api.KIND2 = projectRootKind2.toString();
+    } else {
+      Kind2Api.KIND2 = configuredPath;
+    }
+
+    if (!Files.exists(Path.of(Kind2Api.KIND2)) && Files.exists(projectRootKind2)) {
+      Kind2Api.KIND2 = projectRootKind2.toString();
+    }
+
     Path p = Path.of(Kind2Api.KIND2);
 
     if (!Files.exists(p) || !Files.isExecutable(p)) {
