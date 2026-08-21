@@ -3,14 +3,9 @@ const { spawn } = require('node:child_process');
 const { WebSocketServer, WebSocket } = require('ws');
 
 const WEBSOCKET_PORT = 3001;
-const WEBSOCKET_PATH = '/kind2';
+const WEBSOCKET_PATH = '/lsp';
 
-/*
- * Change these to match your installed launcher.
- *
- * Using the Gradle-generated launcher is preferable because it sets
- * the complete Java classpath.
- */
+
 const JAVA_COMMAND =
   '/home/josh/Kind2/kind2-language-server/build/install/kind2-language-server/bin/kind2-language-server';
 
@@ -31,14 +26,8 @@ webSocketServer.on('connection', webSocket => {
   let javaSocket;
   let browserClosed = false;
 
-  /*
-   * Hold browser messages received before Java connects.
-   */
   const pendingBrowserMessages = [];
 
-  /*
-   * Register this immediately.
-   */
   webSocket.on('message', data => {
     const json = data.toString('utf8');
 
@@ -68,9 +57,6 @@ webSocketServer.on('connection', webSocket => {
 
     connectJavaToBrowser(webSocket, javaSocket);
 
-    /*
-     * Forward anything the browser sent while Java was starting.
-     */
     for (const json of pendingBrowserMessages) {
       console.log(
         'Forwarding queued message:',
@@ -168,13 +154,6 @@ webSocketServer.on('connection', webSocket => {
   });
 });
 
-/**
- * Bridges:
- *
- * Browser WebSocket JSON messages
- *              ↕
- * Content-Length-framed Java LSP stream
- */
 function connectJavaToBrowser(
   webSocket,
   javaSocket
@@ -331,3 +310,5 @@ function summarizeMessage(json) {
     return 'invalid JSON';
   }
 }
+// ~~Put this server code into other repo, use apache liscense~~
+// Write in README.md about this new addition. 
