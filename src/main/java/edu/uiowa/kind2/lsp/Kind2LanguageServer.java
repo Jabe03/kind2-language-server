@@ -96,7 +96,6 @@ public class Kind2LanguageServer
   private Map<String, String> openDocuments;
   private Map<String, Result> parseResults;
   private Map<String, Map<String, NodeResult>> analysisResults;
-  private String workingDirectory;
 
   public Kind2LanguageServer() {
     client = null;
@@ -105,7 +104,6 @@ public class Kind2LanguageServer
     analysisResults = new HashMap<>();
     Result.setOpeningSymbols("");
     Result.setClosingSymbols("");
-    workingDirectory = null;
   }
 
   public String getText(String uri) throws IOException, URISyntaxException {
@@ -165,19 +163,6 @@ public class Kind2LanguageServer
     return new Diagnostic(new Range(new Position(0, 0), new Position(0, 0)),
         log.getValue(), ds, "Kind 2: " + log.getSource());
   }
-
-  /**
-   * Compute a relative filepath from the working directory and file URI,
-   * both as absolute filepaths.
-   * 
-   * @param workingDirectory the current working directory
-   * @param uri the uri of the lustre file
-   */
-  // private String computeRelativeFilepath(String workingDirectory, String uri) {
-  //   return Paths.get(URI.create(workingDirectory)).relativize(
-  //                Paths.get(URI.create(uri)))
-  //                .toString();
-  // }
   
   /**
    * Call Kind 2 to parse a lustre file and check for syntax errors.
@@ -189,16 +174,10 @@ public class Kind2LanguageServer
 
     // ignore exceptions from syntax errors
     try {
-      if (workingDirectory == null) {
-        workingDirectory = client.workspaceFolders().get().get(0).getUri();
-      }
       Kind2Api api = getPresetKind2Api();
       if (api == null) return;
       api.setOnlyParse(true);
       api.setLsp(true);
-      // String filepath = computeRelativeFilepath(workingDirectory, uri);
-      // api.setFakeFilepath(filepath);
-      // api.includeDir(Paths.get(new URI(uri)).getParent().toString());
       parseResults.put(uri, api.execute(getText(uri)));
     } catch (Kind2Exception | URISyntaxException | IOException
         | InterruptedException | ExecutionException e) {
@@ -361,14 +340,8 @@ public class Kind2LanguageServer
         };
 
       try {
-        if (workingDirectory == null) {
-          workingDirectory = client.workspaceFolders().get().get(0).getUri();
-        }
         Kind2Api api = getCheckKind2Api(name, compKind);
         api.enable(Module.MCS);
-        // api.includeDir(Paths.get(new URI(uri)).getParent().toString());
-        // String filepath = computeRelativeFilepath(workingDirectory, uri);
-        // api.setFakeFilepath(filepath);
         api.execute(getText(uri), 
                             result, 
                             monitor,
@@ -440,14 +413,7 @@ public class Kind2LanguageServer
       };
 
       try {
-        if (workingDirectory == null) {
-          workingDirectory = client.workspaceFolders().get().get(0).getUri();
-        }
         Kind2Api api = getCheckKind2Api(name, compKind);
-        // api.includeDir(Paths.get(new URI(uri)).getParent().toString());
-        // String filepath = computeRelativeFilepath(workingDirectory, uri);
-        // api.setFakeFilepath(filepath);
-
         ResultListener listener = new ResultListener() {
           public void onUpdate(Result result){
             List<String> json = handleCheckResult(result, uri);
@@ -563,13 +529,7 @@ public class Kind2LanguageServer
 
 
       try {
-        if (workingDirectory == null) {
-          workingDirectory = client.workspaceFolders().get().get(0).getUri();
-        }
         Kind2Api api = getCheckKind2Api(name, compKind);
-        // api.includeDir(Paths.get(new URI(uri)).getParent().toString());
-        // String filepath = computeRelativeFilepath(workingDirectory, uri);
-        // api.setFakeFilepath(filepath);
         api.enable(Module.CONTRACTCK);
         api.execute(getText(uri), 
                             result, 
@@ -1046,9 +1006,6 @@ private MCSCategory stringToMCSCategory(String cat){
     return CompletableFuture.supplyAsync(() -> {
       try {
         Kind2Api api = getPresetKind2Api();
-        // api.includeDir(Paths.get(new URI(uri)).getParent().toString());
-        // String filepath = computeRelativeFilepath(workingDirectory, uri);
-        // api.setFakeFilepath(filepath);
         return api.interpret(getText(uri), main, json);
       } catch (URISyntaxException | InterruptedException
           | ExecutionException | IOException e) {
