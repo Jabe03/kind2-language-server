@@ -3,20 +3,49 @@ const { spawn } = require('node:child_process');
 const { WebSocketServer, WebSocket } = require('ws');
 
 const WEBSOCKET_PORT = 3001;
+const WEBSOCKET_HOST = '127.0.0.1';
 const WEBSOCKET_PATH = '/lsp';
+
+const DEFAULT_ALLOWED_ORIGINS = new Set([
+  'http://127.0.0.1:3000',
+  'http://localhost:3000'
+]);
+
+const ALLOWED_ORIGINS =
+  parseAllowedOrigins(
+    process.env.KIND2_ALLOWED_ORIGINS
+  ) ?? DEFAULT_ALLOWED_ORIGINS;
 
 
 const JAVA_COMMAND =
   '../../build/install/kind2-language-server/bin/kind2-language-server';
 
 const webSocketServer = new WebSocketServer({
+  host: WEBSOCKET_HOST,
   port: WEBSOCKET_PORT,
-  path: WEBSOCKET_PATH
+  path: WEBSOCKET_PATH,
+  verifyClient: info => {
+    if (isAllowedOrigin(info.origin)) {
+      return true;
+    }
+
+    console.warn(
+      'Rejected WebSocket handshake from origin:',
+      info.origin ?? '<missing>'
+    );
+
+    return false;
+  }
 });
 
 console.log(
   `Kind2 gateway listening at ` +
   `ws://localhost:${WEBSOCKET_PORT}${WEBSOCKET_PATH}`
+);
+
+console.log(
+  'Allowed WebSocket origins:',
+  Array.from(ALLOWED_ORIGINS).join(', ')
 );
 
 webSocketServer.on('connection', webSocket => {
@@ -288,6 +317,30 @@ function closeWebSocket(
   ) {
     webSocket.close(1011, reason);
   }
+}
+
+function parseAllowedOrigins(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const origins = value
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(origin => origin.length > 0);
+
+  if (origins.length === 0) {
+    return null;
+  }
+
+  return new Set(origins);
+}
+
+function isAllowedOrigin(origin) {
+  return (
+    typeof origin === 'string' &&
+    ALLOWED_ORIGINS.has(origin)
+  );
 }
 
 function summarizeMessage(json) {
