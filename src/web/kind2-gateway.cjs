@@ -7,7 +7,7 @@ const WEBSOCKET_PATH = '/lsp';
 
 
 const JAVA_COMMAND =
-  '/home/josh/Kind2/kind2-language-server/build/install/kind2-language-server/bin/kind2-language-server';
+  '../../build/install/kind2-language-server/bin/kind2-language-server';
 
 const webSocketServer = new WebSocketServer({
   port: WEBSOCKET_PORT,
