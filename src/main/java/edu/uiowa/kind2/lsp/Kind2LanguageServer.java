@@ -113,6 +113,21 @@ public class Kind2LanguageServer
     throw new IOException("File not open: " + uri);
   }
 
+  private void configureIncludeContext(Kind2Api api, String uri)
+      throws URISyntaxException {
+    URI documentUri = new URI(uri);
+    if (!"file".equalsIgnoreCase(documentUri.getScheme())) {
+      return;
+    }
+
+    Path documentPath = Path.of(documentUri);
+    Path parent = documentPath.getParent();
+    if (parent != null) {
+      api.includeDir(parent.toString());
+    }
+    api.setFakeFilepath(documentPath.toString());
+  }
+
   void checkLog(Result result) throws ResponseErrorException {
     for (Log log : result.getKind2Logs()) {
       if (log.getLevel() == edu.uiowa.cs.clc.kind2.results.LogLevel.fatal
@@ -176,6 +191,7 @@ public class Kind2LanguageServer
     try {
       Kind2Api api = getPresetKind2Api();
       if (api == null) return;
+      configureIncludeContext(api, uri);
       api.setOnlyParse(true);
       api.setLsp(true);
       parseResults.put(uri, api.execute(getText(uri)));
@@ -341,6 +357,8 @@ public class Kind2LanguageServer
 
       try {
         Kind2Api api = getCheckKind2Api(name, compKind);
+        configureIncludeContext(api, uri);
+
         api.enable(Module.MCS);
         api.execute(getText(uri), 
                             result, 
@@ -414,6 +432,7 @@ public class Kind2LanguageServer
 
       try {
         Kind2Api api = getCheckKind2Api(name, compKind);
+        configureIncludeContext(api, uri);
         ResultListener listener = new ResultListener() {
           public void onUpdate(Result result){
             List<String> json = handleCheckResult(result, uri);
@@ -530,6 +549,7 @@ public class Kind2LanguageServer
 
       try {
         Kind2Api api = getCheckKind2Api(name, compKind);
+        configureIncludeContext(api, uri);
         api.enable(Module.CONTRACTCK);
         api.execute(getText(uri), 
                             result, 
@@ -1020,6 +1040,7 @@ private MCSCategory stringToMCSCategory(String cat){
     return CompletableFuture.supplyAsync(() -> {
       try {
         Kind2Api api = getPresetKind2Api();
+        configureIncludeContext(api, uri);
         return api.interpret(getText(uri), main, json);
       } catch (URISyntaxException | InterruptedException
           | ExecutionException | IOException e) {
@@ -1034,6 +1055,7 @@ private MCSCategory stringToMCSCategory(String cat){
     return CompletableFuture.supplyAsync(() -> {
       try {
         Kind2Api api = getCheckKind2Api(main, "nodeDecl");
+        configureIncludeContext(api, uri);
         List<String> cmd = api.getOptions();
         cmd.set(0, Kind2Api.KIND2);
         cmd.add(new URI(uri).getPath());
