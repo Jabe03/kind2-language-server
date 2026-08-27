@@ -273,7 +273,13 @@ public class Kind2LanguageServer
       }
     }
 
-    obj.addProperty("file", resolved.normalize().toString());
+    URI normalized = resolved.normalize();
+    if ("file".equalsIgnoreCase(normalized.getScheme())) {
+      normalized = new URI(normalized.getScheme(), "", normalized.getPath(),
+          normalized.getQuery(), normalized.getFragment());
+    }
+
+    obj.addProperty("file", normalized.toString());
     return obj.toString();
   }
 
