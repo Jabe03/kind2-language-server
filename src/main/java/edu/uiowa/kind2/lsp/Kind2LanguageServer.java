@@ -264,7 +264,12 @@ public class Kind2LanguageServer
         resolved = candidate;
       } else {
         // Resolve against the source document URI so remote and custom schemes work.
+        try {
         resolved = base.resolve(path);
+            
+        } catch (IllegalArgumentException e){
+          throw new URISyntaxException(path, "This path is not a valid URI");
+        }
       }
     }
 
