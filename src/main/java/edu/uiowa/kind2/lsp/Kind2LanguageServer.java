@@ -893,23 +893,29 @@ private MCSCategory stringToMCSCategory(String cat){
         .configuration(new ConfigurationParams(Arrays.asList(kind2Options)))
         .get().get(0);
 
-    String configuredPath = "";
+    String configuredPath = null;
     if (configs.has("kind2_path") && !configs.get("kind2_path").isJsonNull()) {
       configuredPath = configs.get("kind2_path").getAsString();
-      if (configuredPath.equals("")) {
-        configuredPath = client.getDefaultKind2Path().get();
-      }
     }
 
     Path projectRootKind2 = Path.of(System.getProperty("user.dir"), "kind2");
-    if (configuredPath.isBlank() || configuredPath.startsWith("/static/devextensions/")) {
-      Kind2Api.KIND2 = projectRootKind2.toString();
-    } else {
+    if (configuredPath != null && !configuredPath.isBlank()) {
+      // Respect explicit user configuration even if the target is temporarily missing.
       Kind2Api.KIND2 = configuredPath;
+    } else {
+      String inferredPath = client.getDefaultKind2Path().get();
+
+      if (inferredPath.startsWith("/static/devextensions/")) {
+        Kind2Api.KIND2 = projectRootKind2.toString();
+      } else {
+        Kind2Api.KIND2 = inferredPath;
+      }
     }
 
-    if (!Files.exists(Path.of(Kind2Api.KIND2)) && Files.exists(projectRootKind2)) {
-      Kind2Api.KIND2 = projectRootKind2.toString();
+    if (Kind2Api.KIND2 == null || Kind2Api.KIND2.isBlank()) {
+      client.showMessage(new MessageParams(MessageType.Error,
+          "Kind 2 executable path is blank. Set kind2.kind2_path in settings."));
+      return null;
     }
 
     Path p = Path.of(Kind2Api.KIND2);
