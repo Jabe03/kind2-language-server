@@ -367,5 +367,3 @@ function summarizeMessage(json) {
     return 'invalid JSON';
   }
 }
-// ~~Put this server code into other repo, use apache liscense~~
-// Write in README.md about this new addition. 
