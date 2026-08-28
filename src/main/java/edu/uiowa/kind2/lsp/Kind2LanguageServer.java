@@ -260,7 +260,10 @@ public class Kind2LanguageServer
         candidate = null;
       }
 
-      if (candidate != null && candidate.isAbsolute()) {
+      if (candidate != null && candidate.isAbsolute()
+          && candidate.getScheme() != null
+          // Reject windows drive letter as URI scheme
+          && candidate.getScheme().length() > 1) {
         resolved = candidate;
       } else {
         // Resolve against the source document URI so remote and custom schemes work.
