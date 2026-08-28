@@ -1,4 +1,5 @@
 const net = require('node:net');
+const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { WebSocketServer, WebSocket } = require('ws');
 
@@ -16,9 +17,11 @@ const ALLOWED_ORIGINS =
     process.env.KIND2_ALLOWED_ORIGINS
   ) ?? DEFAULT_ALLOWED_ORIGINS;
 
-
-const JAVA_COMMAND =
-  '../../build/install/kind2-language-server/bin/kind2-language-server';
+const GATEWAY_DIR = __dirname;
+const JAVA_COMMAND = path.resolve(
+  GATEWAY_DIR,
+  '../../build/install/kind2-language-server/bin/kind2-language-server'
+);
 
 const webSocketServer = new WebSocketServer({
   host: WEBSOCKET_HOST,
@@ -122,6 +125,7 @@ webSocketServer.on('connection', webSocket => {
       JAVA_COMMAND,
       [String(javaPort)],
       {
+        cwd: GATEWAY_DIR,
         stdio: ['ignore', 'ignore', 'pipe']
       }
     );
