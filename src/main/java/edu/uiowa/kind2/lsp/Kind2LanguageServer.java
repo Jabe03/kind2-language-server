@@ -266,8 +266,13 @@ public class Kind2LanguageServer
           && candidate.getScheme().length() > 1) {
         resolved = candidate;
       } else if ("file".equalsIgnoreCase(base.getScheme())) {
-        Path p = Path.of(path);
-        resolved = (p.isAbsolute() ? p : Path.of(base).resolveSibling(path)).toUri();
+        try {
+          Path p = Path.of(path);
+          resolved = (p.isAbsolute() ? p : Path.of(base).resolveSibling(path)).toUri();
+        } catch (IllegalArgumentException e) {
+          // Covers InvalidPathException for characters the platform disallows.
+          throw new URISyntaxException(path, "This path is not a valid file path");
+        }
       } else {
         try {
           resolved = base.resolve(path);
@@ -283,7 +288,9 @@ public class Kind2LanguageServer
           normalized.getQuery(), normalized.getFragment());
     }
 
-    obj.addProperty("file", normalized.toString());
+    // toASCIIString so non-ASCII names are percent-encoded the way clients
+    // spell them (VS Code's Uri.toString()).
+    obj.addProperty("file", normalized.toASCIIString());
     return obj.toString();
   }
 
