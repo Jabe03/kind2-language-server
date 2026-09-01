@@ -265,12 +265,13 @@ public class Kind2LanguageServer
           // Reject windows drive letter as URI scheme
           && candidate.getScheme().length() > 1) {
         resolved = candidate;
+      } else if ("file".equalsIgnoreCase(base.getScheme())) {
+        Path p = Path.of(path);
+        resolved = (p.isAbsolute() ? p : Path.of(base).resolveSibling(path)).toUri();
       } else {
-        // Resolve against the source document URI so remote and custom schemes work.
         try {
-        resolved = base.resolve(path);
-            
-        } catch (IllegalArgumentException e){
+          resolved = base.resolve(path);
+        } catch (IllegalArgumentException e) {
           throw new URISyntaxException(path, "This path is not a valid URI");
         }
       }
