@@ -241,10 +241,22 @@ public class Kind2LanguageServer
         .logMessage(new MessageParams(MessageType.Info, "Server initialized."));
   }
 
+  Path pathFromKind2(String path) {
+    if (System.getProperty("os.name").startsWith("Windows")
+        && path.matches("^/[A-Za-z]:/.*")) {
+      return Paths.get(path.substring(1));
+    }
+    return Paths.get(path);
+  }
+
   private String replacePathWithUri(String json, String mainUri, String path)
       throws URISyntaxException {
-    String uri = Paths.get(new URI(mainUri)).getParent().resolve(path)
-        .normalize().toUri().toString();
+    // A null path means the result refers to the main document itself: reuse the
+    // client-provided URI as-is rather than rebuilding it through Path.toUri(),
+    // which can change casing/encoding (e.g. drive letter) and break map lookups.
+    String uri = path == null ? mainUri
+        : Paths.get(new URI(mainUri)).getParent().resolve(pathFromKind2(path))
+            .normalize().toUri().toString();
     if (json.contains("\"file\":")) {
       int l = json.indexOf("\"file\":");
       int r = json.indexOf('\"', l + 9) + 1;
@@ -268,9 +280,7 @@ public class Kind2LanguageServer
           for (AstInfo info : parseResults.get(uri).getAstInfos()) {
             if (info instanceof NodeInfo || info instanceof FunctionInfo || info instanceof TypeDeclInfo || info instanceof ConstDeclInfo) {
               client.logMessage(new MessageParams(MessageType.Info, info.getJson()));
-              components.add(replacePathWithUri(info.getJson(), uri,
-                  info.getFile() == null ? new URI(uri).getPath()
-                      : info.getFile()));
+              components.add(replacePathWithUri(info.getJson(), uri, info.getFile()));
             }
           }
         } catch (URISyntaxException e) {
@@ -437,8 +447,7 @@ public class Kind2LanguageServer
           json = json.substring(0, json.length() - 2) + ",\"properties\": ";
           List<String> properties = analysis.getProperties().stream().map(p -> {
             try {
-              return replacePathWithUri(p.getJson(), uri,
-                  p.getFile() == null ? new URI(uri).getPath() : p.getFile());
+              return replacePathWithUri(p.getJson(), uri, p.getFile());
             } catch (URISyntaxException e) {
               throw new ResponseErrorException(new ResponseError(
                   ResponseErrorCode.ParseError, e.getMessage(), e));
