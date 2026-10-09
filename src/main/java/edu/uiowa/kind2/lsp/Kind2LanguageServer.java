@@ -440,7 +440,7 @@ public class Kind2LanguageServer
         return false;
       }
       throw new ResponseErrorException(
-          new ResponseError(ResponseErrorCode.ParseError, e.getMessage(), e));
+          new ResponseError(ResponseErrorCode.ParseError, errorMessage(e), e));
     }
 
     // A cancelled run returns normally with partial results, so check again.
@@ -649,7 +649,7 @@ public class Kind2LanguageServer
           | InterruptedException | ExecutionException
           | IllegalArgumentException e) {
         throw new ResponseErrorException(new ResponseError(
-            ResponseErrorCode.InternalError, e.getMessage(), e));
+            ResponseErrorCode.InternalError, errorMessage(e), e));
       }
 
       if (cancelToken.isCanceled()) {
@@ -732,7 +732,7 @@ public class Kind2LanguageServer
           | InterruptedException | ExecutionException
           | IllegalArgumentException e) {
         throw new ResponseErrorException(new ResponseError(
-            ResponseErrorCode.InternalError, e.getMessage(), e));
+            ResponseErrorCode.InternalError, errorMessage(e), e));
       }
 
       if (cancelToken.isCanceled()) {
@@ -844,7 +844,7 @@ public class Kind2LanguageServer
           | InterruptedException | ExecutionException
           | IllegalArgumentException e) {
         throw new ResponseErrorException(new ResponseError(
-            ResponseErrorCode.InternalError, e.getMessage(), e));
+            ResponseErrorCode.InternalError, errorMessage(e), e));
       }
 
       if (cancelToken.isCanceled()) {
@@ -1367,7 +1367,7 @@ private MCSCategory stringToMCSCategory(String cat){
           | ExecutionException | IOException
           | IllegalArgumentException e) {
         throw new ResponseErrorException(new ResponseError(
-            ResponseErrorCode.InternalError, e.getMessage(), e));
+            ResponseErrorCode.InternalError, errorMessage(e), e));
       }
     });
   }
@@ -1392,7 +1392,7 @@ private MCSCategory stringToMCSCategory(String cat){
       } catch (InterruptedException | ExecutionException
           | URISyntaxException | IllegalArgumentException e) {
         throw new ResponseErrorException(new ResponseError(
-            ResponseErrorCode.InternalError, e.getMessage(), e));
+            ResponseErrorCode.InternalError, errorMessage(e), e));
       }
     });
   }
@@ -1408,6 +1408,24 @@ private MCSCategory stringToMCSCategory(String cat){
   @Override
   public void exit() {
   }
+  /**
+   * The message to send the client for an exception: the first message along its causes. An
+   * exception without one, such as a NullPointerException, would otherwise reach the client as
+   * an empty error, so its type and where it was thrown are used instead.
+   */
+  static String errorMessage(Throwable e) {
+    Throwable innermost = e;
+    for (Throwable t = e; t != null; t = t.getCause()) {
+      if (t.getMessage() != null && !t.getMessage().isEmpty()) {
+        return t.getMessage();
+      }
+      innermost = t;
+    }
+    StackTraceElement[] trace = innermost.getStackTrace();
+    return innermost.getClass().getSimpleName()
+        + (trace.length > 0 ? " at " + trace[0] : "");
+  }
+
   private static MessageParams getFatalErrorMessage(Throwable err){
     return new MessageParams(MessageType.Error, "Fatal error during parsing: " + err.getMessage() + ".\nPlease report this issue on GitHub with this error message (https://github.com/kind2-mc/kind2-language-server/issues)");
   }
