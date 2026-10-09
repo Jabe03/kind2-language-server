@@ -14,7 +14,13 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 import org.eclipse.lsp4j.ConfigurationItem;
@@ -99,17 +105,37 @@ public class Kind2LanguageServer
   private static final String SAFE_MODE_MEMORY_USAGE_ENV_VAR = "KIND2_SAFE_MODE_MEMORY";
   private static final String SAFE_MODE_ENV_SWAP_USAGE_ENV_VAR = "KIND2_SAFE_MODE_SWAP";
 
+  // How long a document must go without edits before it is re-parsed.
+  private static final long PARSE_DEBOUNCE_MS = 300;
+
   private Kind2LanguageClient client;
   private Map<String, String> openDocuments;
   private Map<String, Result> parseResults;
   private Map<String, Map<String, NodeResult>> analysisResults;
   private final boolean safeMode;
 
+  // Each open, change or close of a document gets a new version from a single
+  // counter shared by all documents, so a version is never reused, even after
+  // a document is closed and reopened. A parse is out of date, and is
+  // cancelled, as soon as its version is no longer the document's latest one.
+  private final AtomicLong versionCounter;
+  private final Map<String, Long> documentVersions;
+  private final Map<String, ScheduledFuture<?>> pendingParses;
+  private final ScheduledExecutorService parseScheduler;
+
   public Kind2LanguageServer() {
     client = null;
-    openDocuments = new HashMap<>();
-    parseResults = new HashMap<>();
-    analysisResults = new HashMap<>();
+    openDocuments = new ConcurrentHashMap<>();
+    parseResults = new ConcurrentHashMap<>();
+    analysisResults = new ConcurrentHashMap<>();
+    versionCounter = new AtomicLong();
+    documentVersions = new ConcurrentHashMap<>();
+    pendingParses = new ConcurrentHashMap<>();
+    parseScheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
+      Thread thread = new Thread(runnable, "kind2-parse-scheduler");
+      thread.setDaemon(true);
+      return thread;
+    });
     safeMode = safeModeIsEnabled();
     Result.setOpeningSymbols("");
     Result.setClosingSymbols("");
@@ -319,31 +345,115 @@ public class Kind2LanguageServer
   }
   
   /**
+   * Gives a document a new version, which makes any parse of an older version
+   * out of date, and cancels its pending parse, if any.
+   *
+   * @return the new version
+   */
+  private long newDocumentVersion(String uri) {
+    long version = versionCounter.incrementAndGet();
+    documentVersions.put(uri, version);
+    ScheduledFuture<?> pending = pendingParses.remove(uri);
+    if (pending != null) {
+      pending.cancel(false);
+    }
+    return version;
+  }
+
+  private boolean isLatestVersion(String uri, long version) {
+    Long latest = documentVersions.get(uri);
+    return latest != null && latest == version;
+  }
+
+  /**
+   * Parses a version of a document in the background, then tells the client to
+   * update its components if the parse was not out of date.
+   */
+  private void startParse(String uri, long version, String text) {
+    CompletableFuture.runAsync(() -> {
+      if (parse(uri, version, text)) {
+        client.updateComponents(uri);
+      }
+    })
+    .exceptionally(ex -> {
+        client.showMessage(getFatalErrorMessage(ex));
+        return null;
+    })
+    ;
+  }
+
+  /**
+   * Parses a version of a document once it has gone {@link #PARSE_DEBOUNCE_MS}
+   * without edits. A newer edit cancels this parse before it starts.
+   */
+  private void scheduleParse(String uri, long version, String text) {
+    // The timer only hands the parse off, so a long parse of one document
+    // never delays the timers of the others.
+    ScheduledFuture<?> pending = parseScheduler.schedule(
+        () -> startParse(uri, version, text),
+        PARSE_DEBOUNCE_MS, TimeUnit.MILLISECONDS);
+    pendingParses.put(uri, pending);
+  }
+
+  /**
    * Call Kind 2 to parse a lustre file and check for syntax errors.
    *
+   * The run is cancelled as soon as a newer version of the document arrives,
+   * and its results are then dropped.
+   *
    * @param uri the uri of the lustre file to parse.
+   * @param version the version of the document that {@code text} belongs to.
+   * @param text the text of the document at that version.
+   * @return true if the results were published, false if the parse was out of
+   *         date.
    */
-  void parse(String uri) {
+  boolean parse(String uri, long version, String text) {
+    if (!isLatestVersion(uri, version)) {
+      return false;
+    }
     client.logMessage(new MessageParams(MessageType.Info, "parsing..."));
+
+    IProgressMonitor monitor = new IProgressMonitor() {
+      @Override
+      public boolean isCanceled() {
+        return !isLatestVersion(uri, version);
+      }
+
+      @Override
+      public void done() {
+      }
+    };
+    Result result = new Result();
 
     // ignore exceptions from syntax errors
     try {
       Kind2Api api = getPresetKind2Api();
-      if (api == null) return;
+      if (api == null) return false;
       configureIncludeContext(api, uri);
       api.setOnlyParse(true);
       api.setLsp(true);
-      parseResults.put(uri, api.execute(getText(uri)));
-    } catch (Kind2Exception | URISyntaxException | IOException
+      api.execute(text, result, monitor);
+    } catch (Kind2Exception | URISyntaxException
       | InterruptedException | ExecutionException
       | IllegalArgumentException e) {
+      if (!isLatestVersion(uri, version)) {
+        return false;
+      }
       throw new ResponseErrorException(
           new ResponseError(ResponseErrorCode.ParseError, e.getMessage(), e));
     }
 
+    // A cancelled run returns normally with partial results, so check again.
+    if (!isLatestVersion(uri, version)) {
+      client.logMessage(new MessageParams(MessageType.Info,
+          "parsing cancelled: the document has changed."));
+      return false;
+    }
+    parseResults.put(uri, result);
+
     List<Diagnostic> diagnostics = new ArrayList<>();
 
-    for (Log log : parseResults.get(uri).getAllKind2Logs()) {
+    for (Log log : result.getAllKind2Logs()) {
       Diagnostic diagnostic = logToDiagnostic(log);
       if (diagnostic != null) {
         diagnostics.add(diagnostic);
@@ -352,6 +462,7 @@ public class Kind2LanguageServer
 
     client.publishDiagnostics(new PublishDiagnosticsParams(uri, diagnostics));
     client.logMessage(new MessageParams(MessageType.Info, "parsing done."));
+    return true;
   }
 
   @Override
@@ -1289,6 +1400,7 @@ private MCSCategory stringToMCSCategory(String cat){
   @Override
   public CompletableFuture<Object> shutdown() {
     return CompletableFuture.supplyAsync(() -> {
+      parseScheduler.shutdownNow();
       return 0;
     });
   }
@@ -1305,38 +1417,29 @@ private MCSCategory stringToMCSCategory(String cat){
       @Override
       public void didOpen(DidOpenTextDocumentParams params) {
         String uri = normalizeUri(params.getTextDocument().getUri());
-        openDocuments.put(uri, params.getTextDocument().getText());
-        analysisResults.put(uri, new HashMap<>());
-        CompletableFuture.runAsync(() -> {
-          parse(uri);
-          client.updateComponents(uri);
-        })
-        .exceptionally(ex -> {
-            client.showMessage(getFatalErrorMessage(ex));
-            return null;
-        })
-        ;
+        String text = params.getTextDocument().getText();
+        openDocuments.put(uri, text);
+        analysisResults.put(uri, new ConcurrentHashMap<>());
+        startParse(uri, newDocumentVersion(uri), text);
       }
 
       @Override
       public void didChange(DidChangeTextDocumentParams params) {
         String uri = normalizeUri(params.getTextDocument().getUri());
-        openDocuments.replace(uri, params.getContentChanges().get(0).getText());
-        analysisResults.put(uri, new HashMap<>());
-        CompletableFuture.runAsync(() -> {
-          parse(uri);
-          client.updateComponents(uri);
-        })
-        .exceptionally(ex -> {
-            client.showMessage(getFatalErrorMessage(ex));
-            return null;
-        })
-        ;
+        String text = params.getContentChanges().get(0).getText();
+        openDocuments.replace(uri, text);
+        analysisResults.put(uri, new ConcurrentHashMap<>());
+        // Wait for a pause in typing, and stop any parse of an older version.
+        scheduleParse(uri, newDocumentVersion(uri), text);
       }
 
       @Override
       public void didClose(DidCloseTextDocumentParams params) {
         String uri = normalizeUri(params.getTextDocument().getUri());
+        // Cancel any pending or running parse before forgetting the document.
+        newDocumentVersion(uri);
+        documentVersions.remove(uri);
+        pendingParses.remove(uri);
         openDocuments.remove(uri);
         parseResults.remove(uri);
         analysisResults.remove(uri);
@@ -1347,8 +1450,11 @@ private MCSCategory stringToMCSCategory(String cat){
 
       @Override
       public void didSave(DidSaveTextDocumentParams params) {
-        openDocuments.replace(normalizeUri(params.getTextDocument().getUri()),
-            params.getText());
+        // The text is only included when the client honors includeText.
+        if (params.getText() != null) {
+          openDocuments.replace(normalizeUri(params.getTextDocument().getUri()),
+              params.getText());
+        }
       }
 
       @Override
