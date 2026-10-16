@@ -468,8 +468,14 @@ public class Kind2LanguageServer
     } catch (Kind2Exception | URISyntaxException
       | InterruptedException | ExecutionException
       | IllegalArgumentException e) {
-      if (!isLatestVersion(uri, version)) {
-        return false;
+      synchronized (publishLock) {
+        if (!isLatestVersion(uri, version)) {
+          return false;
+        }
+        // The results of an older version no longer match the text, so don't
+        // keep serving them (or their diagnostics) after this parse failed.
+        parseResults.remove(uri);
+        client.publishDiagnostics(new PublishDiagnosticsParams(uri, new ArrayList<>()));
       }
       throw new ResponseErrorException(
           new ResponseError(ResponseErrorCode.ParseError, e.getMessage(), e));
