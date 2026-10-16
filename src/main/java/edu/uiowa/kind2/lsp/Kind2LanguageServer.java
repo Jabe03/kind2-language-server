@@ -381,11 +381,26 @@ public class Kind2LanguageServer
       version = versionCounter.incrementAndGet();
       documentVersions.put(uri, version);
     }
+    cancelPendingParse(uri);
+    return version;
+  }
+
+  /**
+   * Forgets a closed document's version, which makes any parse of it out of
+   * date, and cancels its pending parse, if any.
+   */
+  private void forgetDocumentVersion(String uri) {
+    synchronized (publishLock) {
+      documentVersions.remove(uri);
+    }
+    cancelPendingParse(uri);
+  }
+
+  private void cancelPendingParse(String uri) {
     ScheduledFuture<?> pending = pendingParses.remove(uri);
     if (pending != null) {
       pending.cancel(false);
     }
-    return version;
   }
 
   private boolean isLatestVersion(String uri, long version) {
@@ -1506,9 +1521,7 @@ private MCSCategory stringToMCSCategory(String cat){
       public void didClose(DidCloseTextDocumentParams params) {
         String uri = normalizeUri(params.getTextDocument().getUri());
         // Cancel any pending or running parse before forgetting the document.
-        newDocumentVersion(uri);
-        documentVersions.remove(uri);
-        pendingParses.remove(uri);
+        forgetDocumentVersion(uri);
         openDocuments.remove(uri);
         parseResults.remove(uri);
         analysisResults.remove(uri);
