@@ -431,8 +431,9 @@ public class Kind2LanguageServer
    * @param uri the uri of the lustre file to parse.
    * @param version the version of the document that {@code text} belongs to.
    * @param text the text of the document at that version.
-   * @return true if the results were published, false if the parse was out of
-   *         date.
+   * @return true if the client should update its components: the results were
+   *         published, or there is no usable Kind 2 to parse with. False if the
+   *         parse was out of date.
    */
   boolean parse(String uri, long version, String text) {
     if (!isLatestVersion(uri, version)) {
@@ -455,7 +456,11 @@ public class Kind2LanguageServer
     // ignore exceptions from syntax errors
     try {
       Kind2Api api = getPresetKind2Api();
-      if (api == null) return false;
+      if (api == null) {
+        // No usable Kind 2 (the user was already told why). Still have the
+        // client update its components, as it did before parses were versioned.
+        return isLatestVersion(uri, version);
+      }
       configureIncludeContext(api, uri);
       api.setOnlyParse(true);
       api.setLsp(true);
