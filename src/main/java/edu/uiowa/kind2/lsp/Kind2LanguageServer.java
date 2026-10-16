@@ -120,6 +120,10 @@ public class Kind2LanguageServer
   // cancelled, as soon as its version is no longer the document's latest one.
   private final AtomicLong versionCounter;
   private final Map<String, Long> documentVersions;
+  // Held while a parse makes its last version check and publishes its results,
+  // and while a document gets a new version, so a parse can't publish after a
+  // newer version (or a close) has taken over.
+  private final Object publishLock = new Object();
   private final Map<String, ScheduledFuture<?>> pendingParses;
   private final ScheduledExecutorService parseScheduler;
 
@@ -351,8 +355,11 @@ public class Kind2LanguageServer
    * @return the new version
    */
   private long newDocumentVersion(String uri) {
-    long version = versionCounter.incrementAndGet();
-    documentVersions.put(uri, version);
+    long version;
+    synchronized (publishLock) {
+      version = versionCounter.incrementAndGet();
+      documentVersions.put(uri, version);
+    }
     ScheduledFuture<?> pending = pendingParses.remove(uri);
     if (pending != null) {
       pending.cancel(false);
@@ -443,14 +450,6 @@ public class Kind2LanguageServer
           new ResponseError(ResponseErrorCode.ParseError, e.getMessage(), e));
     }
 
-    // A cancelled run returns normally with partial results, so check again.
-    if (!isLatestVersion(uri, version)) {
-      client.logMessage(new MessageParams(MessageType.Info,
-          "parsing cancelled: the document has changed."));
-      return false;
-    }
-    parseResults.put(uri, result);
-
     List<Diagnostic> diagnostics = new ArrayList<>();
 
     for (Log log : result.getAllKind2Logs()) {
@@ -460,7 +459,16 @@ public class Kind2LanguageServer
       }
     }
 
-    client.publishDiagnostics(new PublishDiagnosticsParams(uri, diagnostics));
+    synchronized (publishLock) {
+      // A cancelled run returns normally with partial results, so check again.
+      if (!isLatestVersion(uri, version)) {
+        client.logMessage(new MessageParams(MessageType.Info,
+            "parsing cancelled: the document has changed."));
+        return false;
+      }
+      parseResults.put(uri, result);
+      client.publishDiagnostics(new PublishDiagnosticsParams(uri, diagnostics));
+    }
     client.logMessage(new MessageParams(MessageType.Info, "parsing done."));
     return true;
   }
