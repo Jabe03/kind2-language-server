@@ -503,9 +503,10 @@ public class Kind2LanguageServer
       api.setOnlyParse(true);
       api.setLsp(true);
       api.execute(text, result, monitor);
-    } catch (Kind2Exception | URISyntaxException
-      | InterruptedException | ExecutionException
-      | IllegalArgumentException e) {
+    } catch (URISyntaxException | InterruptedException | ExecutionException
+      | RuntimeException e) {
+      // Any failure (Kind2Exception and IllegalArgumentException included, as
+      // well as unexpected ones) is only reported for the latest version.
       synchronized (publishLock) {
         if (!isLatestVersion(uri, version)) {
           return false;
