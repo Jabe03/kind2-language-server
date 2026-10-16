@@ -22,10 +22,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import org.eclipse.lsp4j.ConfigurationItem;
@@ -162,11 +164,15 @@ public class Kind2LanguageServer
       thread.setDaemon(true);
       return thread;
     });
-    parseScheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
+    ScheduledThreadPoolExecutor scheduler = new ScheduledThreadPoolExecutor(1, runnable -> {
       Thread thread = new Thread(runnable, "kind2-parse-scheduler");
       thread.setDaemon(true);
       return thread;
     });
+    // Drop cancelled timers (and the text they hold) right away, rather than
+    // when their delay would have run out.
+    scheduler.setRemoveOnCancelPolicy(true);
+    parseScheduler = scheduler;
     safeMode = safeModeIsEnabled();
     Result.setOpeningSymbols("");
     Result.setClosingSymbols("");
@@ -448,11 +454,16 @@ public class Kind2LanguageServer
   private void scheduleParse(String uri, long version, String text) {
     // The timer only hands the parse off, so a long parse of one document
     // never delays the timers of the others.
+    // Lets the timer remove its own entry when it fires, but not a newer
+    // timer's that has replaced it.
+    AtomicReference<ScheduledFuture<?>> self = new AtomicReference<>();
     ScheduledFuture<?> pending;
     try {
-      pending = parseScheduler.schedule(
-          () -> startParse(uri, version, text),
-          PARSE_DEBOUNCE_MS, TimeUnit.MILLISECONDS);
+      pending = parseScheduler.schedule(() -> {
+        pendingParses.remove(uri, self.get());
+        startParse(uri, version, text);
+      }, PARSE_DEBOUNCE_MS, TimeUnit.MILLISECONDS);
+      self.set(pending);
     } catch (RejectedExecutionException e) {
       // The server has been shut down, so there is nothing to parse for.
       return;
