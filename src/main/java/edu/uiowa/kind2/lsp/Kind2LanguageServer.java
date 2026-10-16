@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -23,6 +24,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
@@ -131,6 +133,10 @@ public class Kind2LanguageServer
   private final Object publishLock = new Object();
   private final Map<String, ScheduledFuture<?>> pendingParses;
   private final ScheduledExecutorService parseScheduler;
+  // Runs the parses themselves, which block on Kind 2, so they never wait for
+  // (or hold up) other work on the common pool. Out-of-date parses are
+  // cancelled, so there are about as many threads as documents being parsed.
+  private final ExecutorService parseExecutor;
   private final Set<CompletableFuture<Void>> runningParses;
   // Set by shutdown: from then on every parse is out of date.
   private volatile boolean shutDown;
@@ -144,6 +150,12 @@ public class Kind2LanguageServer
     documentVersions = new ConcurrentHashMap<>();
     pendingParses = new ConcurrentHashMap<>();
     runningParses = ConcurrentHashMap.newKeySet();
+    AtomicInteger parseThreads = new AtomicInteger();
+    parseExecutor = Executors.newCachedThreadPool(runnable -> {
+      Thread thread = new Thread(runnable, "kind2-parse-" + parseThreads.incrementAndGet());
+      thread.setDaemon(true);
+      return thread;
+    });
     parseScheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
       Thread thread = new Thread(runnable, "kind2-parse-scheduler");
       thread.setDaemon(true);
@@ -389,16 +401,21 @@ public class Kind2LanguageServer
    * update its components if the parse was not out of date.
    */
   private void startParse(String uri, long version, String text) {
-    CompletableFuture<Void> run = CompletableFuture.runAsync(() -> {
-      if (parse(uri, version, text)) {
-        client.updateComponents(uri);
-      }
-    })
-    .exceptionally(ex -> {
-        client.showMessage(getFatalErrorMessage(ex));
-        return null;
-    })
-    ;
+    CompletableFuture<Void> run;
+    try {
+      run = CompletableFuture.runAsync(() -> {
+        if (parse(uri, version, text)) {
+          client.updateComponents(uri);
+        }
+      }, parseExecutor)
+      .exceptionally(ex -> {
+          client.showMessage(getFatalErrorMessage(ex));
+          return null;
+      });
+    } catch (RejectedExecutionException e) {
+      // The server has been shut down, so there is nothing to parse for.
+      return;
+    }
     runningParses.add(run);
     run.whenComplete((ignored, ex) -> runningParses.remove(run));
   }
@@ -1452,6 +1469,7 @@ private MCSCategory stringToMCSCategory(String cat){
       } catch (ExecutionException | TimeoutException e) {
         // Shut down anyway.
       }
+      parseExecutor.shutdownNow();
       return 0;
     });
   }
