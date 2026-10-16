@@ -1409,9 +1409,8 @@ private MCSCategory stringToMCSCategory(String cat){
   public void exit() {
   }
   /**
-   * The message to send the client for an exception: the first message along its causes. An
-   * exception without one, such as a NullPointerException, would otherwise reach the client as
-   * an empty error, so its type and where it was thrown are used instead.
+   * The message to send the client for an exception: the first message along its causes.
+   * This produces more informative errors.
    */
   static String errorMessage(Throwable e) {
     Throwable innermost = e;
