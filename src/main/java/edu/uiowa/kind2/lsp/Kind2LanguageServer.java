@@ -121,21 +121,27 @@ public class Kind2LanguageServer
   private Map<String, Map<String, NodeResult>> analysisResults;
   private final boolean safeMode;
 
-  // Each open, change or close of a document gets a new version from a single
-  // counter shared by all documents, so a version is never reused, even after
-  // a document is closed and reopened. A parse is out of date, and is
-  // cancelled, as soon as its version is no longer the document's latest one.
+  /**
+   * Each open, change or close of a document gets a new version from a single
+   * counter shared by all documents, so a version is never reused, even after
+   * a document is closed and reopened. A parse is out of date, and is
+   * cancelled, as soon as its version is no longer the document's latest one.
+   */
   private final AtomicLong versionCounter;
   private final Map<String, Long> documentVersions;
-  // Held while a parse makes its last version check and publishes its results,
-  // and while a document gets a new version, so a parse can't publish after a
-  // newer version (or a close) has taken over.
+  /**
+   * Held while a parse makes its last version check and publishes its results,
+   * and while a document gets a new version, so a parse can't publish after a
+   * newer version (or a close) has taken over.
+   */
   private final Object publishLock = new Object();
   private final Map<String, ScheduledFuture<?>> pendingParses;
   private final ScheduledExecutorService parseScheduler;
-  // Runs the parses themselves, which block on Kind 2, so they never wait for
-  // (or hold up) other work on the common pool. Out-of-date parses are
-  // cancelled, so there are about as many threads as documents being parsed.
+  /**
+   * Runs the parses themselves, which block on Kind 2, so they never wait for
+   * (or hold up) other work on the common pool. Out-of-date parses are
+   * cancelled, so there are about as many threads as documents being parsed.
+   */
   private final ExecutorService parseExecutor;
   private final Set<CompletableFuture<Void>> runningParses;
   // Set by shutdown: from then on every parse is out of date.
