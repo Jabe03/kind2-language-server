@@ -13,13 +13,16 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
@@ -107,6 +110,8 @@ public class Kind2LanguageServer
 
   // How long a document must go without edits before it is re-parsed.
   private static final long PARSE_DEBOUNCE_MS = 300;
+  // How long shutdown waits for running parses to stop.
+  private static final long SHUTDOWN_WAIT_SECONDS = 10;
 
   private Kind2LanguageClient client;
   private Map<String, String> openDocuments;
@@ -126,6 +131,9 @@ public class Kind2LanguageServer
   private final Object publishLock = new Object();
   private final Map<String, ScheduledFuture<?>> pendingParses;
   private final ScheduledExecutorService parseScheduler;
+  private final Set<CompletableFuture<Void>> runningParses;
+  // Set by shutdown: from then on every parse is out of date.
+  private volatile boolean shutDown;
 
   public Kind2LanguageServer() {
     client = null;
@@ -135,6 +143,7 @@ public class Kind2LanguageServer
     versionCounter = new AtomicLong();
     documentVersions = new ConcurrentHashMap<>();
     pendingParses = new ConcurrentHashMap<>();
+    runningParses = ConcurrentHashMap.newKeySet();
     parseScheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
       Thread thread = new Thread(runnable, "kind2-parse-scheduler");
       thread.setDaemon(true);
@@ -368,6 +377,9 @@ public class Kind2LanguageServer
   }
 
   private boolean isLatestVersion(String uri, long version) {
+    if (shutDown) {
+      return false;
+    }
     Long latest = documentVersions.get(uri);
     return latest != null && latest == version;
   }
@@ -377,7 +389,7 @@ public class Kind2LanguageServer
    * update its components if the parse was not out of date.
    */
   private void startParse(String uri, long version, String text) {
-    CompletableFuture.runAsync(() -> {
+    CompletableFuture<Void> run = CompletableFuture.runAsync(() -> {
       if (parse(uri, version, text)) {
         client.updateComponents(uri);
       }
@@ -387,6 +399,8 @@ public class Kind2LanguageServer
         return null;
     })
     ;
+    runningParses.add(run);
+    run.whenComplete((ignored, ex) -> runningParses.remove(run));
   }
 
   /**
@@ -396,9 +410,15 @@ public class Kind2LanguageServer
   private void scheduleParse(String uri, long version, String text) {
     // The timer only hands the parse off, so a long parse of one document
     // never delays the timers of the others.
-    ScheduledFuture<?> pending = parseScheduler.schedule(
-        () -> startParse(uri, version, text),
-        PARSE_DEBOUNCE_MS, TimeUnit.MILLISECONDS);
+    ScheduledFuture<?> pending;
+    try {
+      pending = parseScheduler.schedule(
+          () -> startParse(uri, version, text),
+          PARSE_DEBOUNCE_MS, TimeUnit.MILLISECONDS);
+    } catch (RejectedExecutionException e) {
+      // The server has been shut down, so there is nothing to parse for.
+      return;
+    }
     pendingParses.put(uri, pending);
   }
 
@@ -1408,7 +1428,19 @@ private MCSCategory stringToMCSCategory(String cat){
   @Override
   public CompletableFuture<Object> shutdown() {
     return CompletableFuture.supplyAsync(() -> {
+      // Every parse is now out of date, so running ones cancel their Kind 2
+      // run. Wait for them, so no Kind 2 process (or safe-mode container) is
+      // still running when the client tells the server to exit.
+      shutDown = true;
       parseScheduler.shutdownNow();
+      try {
+        CompletableFuture.allOf(runningParses.toArray(new CompletableFuture<?>[0]))
+            .get(SHUTDOWN_WAIT_SECONDS, TimeUnit.SECONDS);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      } catch (ExecutionException | TimeoutException e) {
+        // Shut down anyway.
+      }
       return 0;
     });
   }
