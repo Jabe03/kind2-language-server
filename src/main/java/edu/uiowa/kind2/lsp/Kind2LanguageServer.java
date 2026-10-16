@@ -13,6 +13,7 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -370,7 +371,18 @@ public class Kind2LanguageServer
    * update its components if the parse was not out of date.
    */
   private void startParse(String uri, long version, String text) {
+    startParse(uri, version, text, false);
+  }
+
+  /**
+   * Same as {@link #startParse(String, long, String)}, but when {@code edited}
+   * is true, nothing is parsed if the client only wants parses on save.
+   */
+  private void startParse(String uri, long version, String text, boolean edited) {
     CompletableFuture.runAsync(() -> {
+      if (edited && parseOnSave()) {
+        return;
+      }
       if (parse(uri, version, text)) {
         client.updateComponents(uri);
       }
@@ -386,11 +398,30 @@ public class Kind2LanguageServer
    * Parses a version of a document once it has gone {@link #PARSE_DEBOUNCE_MS}
    * without edits. A newer edit cancels this parse before it starts.
    */
+  /**
+   * Whether the client wants documents parsed only when they are saved
+   * ({@code kind2.parse_on_save}). False if the client does not say.
+   */
+  private boolean parseOnSave() {
+    try {
+      ConfigurationItem kind2Options = new ConfigurationItem();
+      kind2Options.setSection("kind2");
+      JsonObject configs = (JsonObject) client
+          .configuration(new ConfigurationParams(Arrays.asList(kind2Options)))
+          .get().get(0);
+      JsonElement value = configs.get("parse_on_save");
+      return value != null && !value.isJsonNull() && value.getAsBoolean();
+    } catch (InterruptedException | ExecutionException | ClassCastException
+        | IllegalStateException | UnsupportedOperationException e) {
+      return false;
+    }
+  }
+
   private void scheduleParse(String uri, long version, String text) {
     // The timer only hands the parse off, so a long parse of one document
     // never delays the timers of the others.
     ScheduledFuture<?> pending = parseScheduler.schedule(
-        () -> startParse(uri, version, text),
+        () -> startParse(uri, version, text, true),
         PARSE_DEBOUNCE_MS, TimeUnit.MILLISECONDS);
     pendingParses.put(uri, pending);
   }
@@ -1468,11 +1499,21 @@ private MCSCategory stringToMCSCategory(String cat){
 
       @Override
       public void didSave(DidSaveTextDocumentParams params) {
+        String uri = normalizeUri(params.getTextDocument().getUri());
         // The text is only included when the client honors includeText.
         if (params.getText() != null) {
-          openDocuments.replace(normalizeUri(params.getTextDocument().getUri()),
-              params.getText());
+          openDocuments.replace(uri, params.getText());
         }
+        String text = openDocuments.get(uri);
+        if (text == null) {
+          return;
+        }
+        Long versionAtSave = documentVersions.get(uri);
+        CompletableFuture.runAsync(() -> {
+          if (parseOnSave() && documentVersions.get(uri).equals(versionAtSave)) {
+            startParse(uri, newDocumentVersion(uri), text);
+          }
+        });
       }
 
       @Override
