@@ -1491,7 +1491,10 @@ private MCSCategory stringToMCSCategory(String cat){
       } catch (ExecutionException | TimeoutException e) {
         // Shut down anyway.
       }
-      parseExecutor.shutdownNow();
+      // Not shutdownNow: a parse that is still stopping its Kind 2 run (e.g.
+      // waiting on docker kill) shouldn't be interrupted. The threads are
+      // daemons, so they don't keep the server from exiting.
+      parseExecutor.shutdown();
       return 0;
     });
   }
