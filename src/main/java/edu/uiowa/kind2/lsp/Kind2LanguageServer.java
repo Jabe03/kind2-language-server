@@ -114,6 +114,8 @@ public class Kind2LanguageServer
 
   // How long a document must go without edits before it is re-parsed.
   private static final long PARSE_DEBOUNCE_MS = 300;
+  // How long a request that reads parse results waits for the latest parse.
+  private static final long PARSE_WAIT_SECONDS = 5;
   // How long shutdown waits for running parses to stop.
   private static final long SHUTDOWN_WAIT_SECONDS = 10;
 
@@ -147,8 +149,13 @@ public class Kind2LanguageServer
   private final ExecutorService parseExecutor;
   private final Set<CompletableFuture<Void>> runningParses;
 
-  /** One version of an open document, compared by identity. */
+  /** One version of an open document. */
   private static final class DocumentVersion {
+    /**
+     * Completes once this version has been parsed, or once it never will be
+     * (a newer version, a close, or shutdown).
+     */
+    final CompletableFuture<Void> settled = new CompletableFuture<>();
   }
 
   public Kind2LanguageServer() {
@@ -390,7 +397,10 @@ public class Kind2LanguageServer
    */
   private DocumentVersion newDocumentVersion(String uri) {
     DocumentVersion version = new DocumentVersion();
-    documentVersions.put(uri, version);
+    DocumentVersion previous = documentVersions.put(uri, version);
+    if (previous != null) {
+      previous.settled.complete(null);
+    }
     cancelPendingParse(uri);
     return version;
   }
@@ -401,7 +411,10 @@ public class Kind2LanguageServer
    */
   private void closeDocument(String uri) {
     synchronized (publishLock) {
-      documentVersions.remove(uri);
+      DocumentVersion previous = documentVersions.remove(uri);
+      if (previous != null) {
+        previous.settled.complete(null);
+      }
       parseResults.remove(uri);
       client.publishDiagnostics(
           new PublishDiagnosticsParams(uri, new ArrayList<>()));
@@ -422,6 +435,36 @@ public class Kind2LanguageServer
   }
 
   /**
+   * Completes once the latest version of a document has been parsed, so its
+   * parse results match the text the client has. Gives up after
+   * {@link #PARSE_WAIT_SECONDS}, after which the results may be out of date.
+   */
+  private CompletableFuture<Void> whenParsed(String uri) {
+    CompletableFuture<Void> parsed = latestVersionParsed(uri);
+    try {
+      ScheduledFuture<?> timeout = parseScheduler.schedule(
+          () -> parsed.complete(null), PARSE_WAIT_SECONDS, TimeUnit.SECONDS);
+      parsed.whenComplete((ignored, ex) -> timeout.cancel(false));
+    } catch (RejectedExecutionException e) {
+      // The server has been shut down, so there is nothing left to wait for.
+      parsed.complete(null);
+    }
+    return parsed;
+  }
+
+  private CompletableFuture<Void> latestVersionParsed(String uri) {
+    DocumentVersion latest = documentVersions.get(uri);
+    if (latest == null) {
+      return CompletableFuture.completedFuture(null);
+    }
+    // If a newer version took over meanwhile, wait for that one instead.
+    return latest.settled.thenCompose(ignored ->
+        documentVersions.get(uri) == latest
+            ? CompletableFuture.completedFuture(null)
+            : latestVersionParsed(uri));
+  }
+
+  /**
    * Parses a version of a document in the background, then tells the client to
    * update its components if the parse was not out of date.
    */
@@ -439,10 +482,14 @@ public class Kind2LanguageServer
       });
     } catch (RejectedExecutionException e) {
       // The server has been shut down, so there is nothing to parse for.
+      version.settled.complete(null);
       return;
     }
     runningParses.add(run);
-    run.whenComplete((ignored, ex) -> runningParses.remove(run));
+    run.whenComplete((ignored, ex) -> {
+      runningParses.remove(run);
+      version.settled.complete(null);
+    });
   }
 
   /**
@@ -464,6 +511,7 @@ public class Kind2LanguageServer
       self.set(pending);
     } catch (RejectedExecutionException e) {
       // The server has been shut down, so there is nothing to parse for.
+      version.settled.complete(null);
       return;
     }
     pendingParses.put(uri, pending);
@@ -660,7 +708,8 @@ public class Kind2LanguageServer
         throw new ResponseErrorException(new ResponseError(
             ResponseErrorCode.InvalidParams, "Expected a single URI string parameter", null));
       }
-
+      return uri;
+    }).thenCompose(uri -> whenParsed(uri).thenApplyAsync(ignored -> {
       List<String> components = new ArrayList<>();
       if (parseResults.containsKey(uri)) {
         try {
@@ -677,7 +726,7 @@ public class Kind2LanguageServer
         }
       }
       return components;
-    });
+    }));
   }
 
   private String extractSingleStringParam(JsonElement params, String methodName) {
@@ -1479,6 +1528,8 @@ private MCSCategory stringToMCSCategory(String cat){
       // daemons, so they don't keep the server from exiting.
       parseExecutor.shutdown();
       parseScheduler.shutdownNow();
+      // Pending parses will never run, so don't keep requests waiting on them.
+      documentVersions.values().forEach(version -> version.settled.complete(null));
       try {
         CompletableFuture.allOf(runningParses.toArray(new CompletableFuture<?>[0]))
             .get(SHUTDOWN_WAIT_SECONDS, TimeUnit.SECONDS);
@@ -1541,8 +1592,9 @@ private MCSCategory stringToMCSCategory(String cat){
       @Override
       public CompletableFuture<List<Either<SymbolInformation, DocumentSymbol>>> documentSymbol(
           DocumentSymbolParams params) {
-        return CompletableFuture.supplyAsync(() -> {
-          String uri = normalizeUri(params.getTextDocument().getUri());
+        String uri = normalizeUri(params.getTextDocument().getUri());
+        // Wait for the latest parse, so the ranges match the client's text.
+        return whenParsed(uri).thenApplyAsync(ignored -> {
           List<Either<SymbolInformation, DocumentSymbol>> symbols = new ArrayList<>();
           if (parseResults.containsKey(uri)) {
             for (AstInfo info : parseResults.get(uri).getAstInfos()) {
@@ -1602,8 +1654,10 @@ private MCSCategory stringToMCSCategory(String cat){
       @Override
       public CompletableFuture<Either<List<? extends Location>, List<? extends LocationLink>>> definition(
           DefinitionParams params) {
-        return CompletableFuture.supplyAsync(() -> {
-          String uri = normalizeUri(params.getTextDocument().getUri());
+        String uri = normalizeUri(params.getTextDocument().getUri());
+        // Wait for the latest parse, so the name read from the current text
+        // and the positions from the parse agree.
+        return whenParsed(uri).thenApplyAsync(ignored -> {
           String name;
           try {
             name = getSymbolName(getText(uri), params.getPosition());
