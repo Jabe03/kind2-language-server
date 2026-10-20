@@ -26,7 +26,6 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.stream.Collectors;
@@ -125,17 +124,17 @@ public class Kind2LanguageServer
   private final boolean safeMode;
 
   /**
-   * Each open, change or close of a document gets a new version from a single
-   * counter shared by all documents, so a version is never reused, even after
-   * a document is closed and reopened. A parse is out of date, and is
+   * The latest version of each open document. Each open or change of a
+   * document gets a new version object, so a version is never reused, even
+   * after a document is closed and reopened. A parse is out of date, and is
    * cancelled, as soon as its version is no longer the document's latest one.
    */
-  private final AtomicLong versionCounter;
-  private final Map<String, Long> documentVersions;
+  private final Map<String, DocumentVersion> documentVersions;
   /**
    * Held while a parse makes its last version check and publishes its results,
-   * and while a document gets a new version, so a parse can't publish after a
-   * newer version (or a close) has taken over.
+   * and while a document is closed, so parses publish in version order and
+   * none can publish after a close. A new version doesn't take it: a parse
+   * that publishes just after an edit is replaced by the next one.
    */
   private final Object publishLock = new Object();
   private final Map<String, ScheduledFuture<?>> pendingParses;
@@ -147,15 +146,16 @@ public class Kind2LanguageServer
    */
   private final ExecutorService parseExecutor;
   private final Set<CompletableFuture<Void>> runningParses;
-  // Set by shutdown: from then on every parse is out of date.
-  private volatile boolean shutDown;
+
+  /** One version of an open document, compared by identity. */
+  private static final class DocumentVersion {
+  }
 
   public Kind2LanguageServer() {
     client = null;
     openDocuments = new ConcurrentHashMap<>();
     parseResults = new ConcurrentHashMap<>();
     analysisResults = new ConcurrentHashMap<>();
-    versionCounter = new AtomicLong();
     documentVersions = new ConcurrentHashMap<>();
     pendingParses = new ConcurrentHashMap<>();
     runningParses = ConcurrentHashMap.newKeySet();
@@ -388,23 +388,23 @@ public class Kind2LanguageServer
    *
    * @return the new version
    */
-  private long newDocumentVersion(String uri) {
-    long version;
-    synchronized (publishLock) {
-      version = versionCounter.incrementAndGet();
-      documentVersions.put(uri, version);
-    }
+  private DocumentVersion newDocumentVersion(String uri) {
+    DocumentVersion version = new DocumentVersion();
+    documentVersions.put(uri, version);
     cancelPendingParse(uri);
     return version;
   }
 
   /**
-   * Forgets a closed document's version, which makes any parse of it out of
-   * date, and cancels its pending parse, if any.
+   * Closes a document: makes any parse of it out of date, cancels its pending
+   * parse, if any, and clears its results and diagnostics.
    */
-  private void forgetDocumentVersion(String uri) {
+  private void closeDocument(String uri) {
     synchronized (publishLock) {
       documentVersions.remove(uri);
+      parseResults.remove(uri);
+      client.publishDiagnostics(
+          new PublishDiagnosticsParams(uri, new ArrayList<>()));
     }
     cancelPendingParse(uri);
   }
@@ -416,19 +416,16 @@ public class Kind2LanguageServer
     }
   }
 
-  private boolean isLatestVersion(String uri, long version) {
-    if (shutDown) {
-      return false;
-    }
-    Long latest = documentVersions.get(uri);
-    return latest != null && latest == version;
+  private boolean isLatestVersion(String uri, DocumentVersion version) {
+    // After shutdown, every parse is out of date.
+    return !parseExecutor.isShutdown() && documentVersions.get(uri) == version;
   }
 
   /**
    * Parses a version of a document in the background, then tells the client to
    * update its components if the parse was not out of date.
    */
-  private void startParse(String uri, long version, String text) {
+  private void startParse(String uri, DocumentVersion version, String text) {
     CompletableFuture<Void> run;
     try {
       run = CompletableFuture.runAsync(() -> {
@@ -452,7 +449,7 @@ public class Kind2LanguageServer
    * Parses a version of a document once it has gone {@link #PARSE_DEBOUNCE_MS}
    * without edits. A newer edit cancels this parse before it starts.
    */
-  private void scheduleParse(String uri, long version, String text) {
+  private void scheduleParse(String uri, DocumentVersion version, String text) {
     // The timer only hands the parse off, so a long parse of one document
     // never delays the timers of the others.
     // Lets the timer remove its own entry when it fires, but not a newer
@@ -501,7 +498,7 @@ public class Kind2LanguageServer
    *         published or cleared, or there is no usable Kind 2 to parse with.
    *         False if the parse was out of date.
    */
-  boolean parse(String uri, long version, String text) {
+  boolean parse(String uri, DocumentVersion version, String text) {
     if (!isLatestVersion(uri, version)) {
       return false;
     }
@@ -1477,7 +1474,10 @@ private MCSCategory stringToMCSCategory(String cat){
       // Every parse is now out of date, so running ones cancel their Kind 2
       // run. Wait for them, so no Kind 2 process (or safe-mode container) is
       // still running when the client tells the server to exit.
-      shutDown = true;
+      // Not shutdownNow: a parse that is still stopping its Kind 2 run (e.g.
+      // waiting on docker kill) shouldn't be interrupted. The threads are
+      // daemons, so they don't keep the server from exiting.
+      parseExecutor.shutdown();
       parseScheduler.shutdownNow();
       try {
         CompletableFuture.allOf(runningParses.toArray(new CompletableFuture<?>[0]))
@@ -1487,10 +1487,6 @@ private MCSCategory stringToMCSCategory(String cat){
       } catch (ExecutionException | TimeoutException e) {
         // Shut down anyway.
       }
-      // Not shutdownNow: a parse that is still stopping its Kind 2 run (e.g.
-      // waiting on docker kill) shouldn't be interrupted. The threads are
-      // daemons, so they don't keep the server from exiting.
-      parseExecutor.shutdown();
       return 0;
     });
   }
@@ -1527,13 +1523,10 @@ private MCSCategory stringToMCSCategory(String cat){
       public void didClose(DidCloseTextDocumentParams params) {
         String uri = normalizeUri(params.getTextDocument().getUri());
         // Cancel any pending or running parse before forgetting the document.
-        forgetDocumentVersion(uri);
+        closeDocument(uri);
         openDocuments.remove(uri);
-        parseResults.remove(uri);
         analysisResults.remove(uri);
         client.updateComponents(uri);
-        client.publishDiagnostics(
-            new PublishDiagnosticsParams(uri, new ArrayList<>()));
       }
 
       @Override
