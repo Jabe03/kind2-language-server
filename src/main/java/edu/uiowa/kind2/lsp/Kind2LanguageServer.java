@@ -28,6 +28,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.stream.Collectors;
 
 import org.eclipse.lsp4j.ConfigurationItem;
@@ -472,6 +473,22 @@ public class Kind2LanguageServer
   }
 
   /**
+   * Builds a progress monitor that only reports cancellation.
+   */
+  private static IProgressMonitor monitorFrom(BooleanSupplier isCanceled) {
+    return new IProgressMonitor() {
+      @Override
+      public boolean isCanceled() {
+        return isCanceled.getAsBoolean();
+      }
+
+      @Override
+      public void done() {
+      }
+    };
+  }
+
+  /**
    * Call Kind 2 to parse a lustre file and check for syntax errors.
    *
    * The run is cancelled as soon as a newer version of the document arrives,
@@ -490,16 +507,7 @@ public class Kind2LanguageServer
     }
     client.logMessage(new MessageParams(MessageType.Info, "parsing..."));
 
-    IProgressMonitor monitor = new IProgressMonitor() {
-      @Override
-      public boolean isCanceled() {
-        return !isLatestVersion(uri, version);
-      }
-
-      @Override
-      public void done() {
-      }
-    };
+    IProgressMonitor monitor = monitorFrom(() -> !isLatestVersion(uri, version));
     Result result = new Result();
 
     // ignore exceptions from syntax errors
@@ -707,16 +715,8 @@ public class Kind2LanguageServer
           "Checking minimal cut sets of component " + name + " in " + uri + "..."));
       analysisResults.get(uri).remove(name);
       Result result = new Result();
-      IProgressMonitor monitor = new IProgressMonitor() {
-        @Override
-        public boolean isCanceled() {
-          return cancelToken == null ? false : cancelToken.isCanceled();
-        }
-
-        @Override
-        public void done() {
-        }
-      };
+      IProgressMonitor monitor =
+          monitorFrom(() -> cancelToken != null && cancelToken.isCanceled());
 
       ResultListener listener = new ResultListener() {
           public void onUpdate(Result result){
@@ -791,16 +791,8 @@ public class Kind2LanguageServer
           "Checking component " + name + " in " + uri + "..."));
       analysisResults.get(uri).remove(name);
       Result result = new Result();
-      IProgressMonitor monitor = new IProgressMonitor() {
-        @Override
-        public boolean isCanceled() {
-          return cancelToken == null ? false : cancelToken.isCanceled();
-        }
-
-        @Override
-        public void done() {
-        }
-      };
+      IProgressMonitor monitor =
+          monitorFrom(() -> cancelToken != null && cancelToken.isCanceled());
 
       try {
         Kind2Api api = getCheckKind2Api(name, compKind);
@@ -903,16 +895,8 @@ public class Kind2LanguageServer
           "Checking realizability of component " + name + " in " + uri + "..."));
       analysisResults.get(uri).remove(name);
       Result result = new Result();
-      IProgressMonitor monitor = new IProgressMonitor() {
-        @Override
-        public boolean isCanceled() {
-          return cancelToken == null ? false : cancelToken.isCanceled();
-        }
-
-        @Override
-        public void done() {
-        }
-      };
+      IProgressMonitor monitor =
+          monitorFrom(() -> cancelToken != null && cancelToken.isCanceled());
       ResultListener listener = new ResultListener() {
           public void onUpdate(Result result){
             List<String> json = handleRealizabilityResult(result, uri);
