@@ -498,8 +498,8 @@ public class Kind2LanguageServer
    * @param version the version of the document that {@code text} belongs to.
    * @param text the text of the document at that version.
    * @return true if the client should update its components: the results were
-   *         published, or there is no usable Kind 2 to parse with. False if the
-   *         parse was out of date.
+   *         published or cleared, or there is no usable Kind 2 to parse with.
+   *         False if the parse was out of date.
    */
   boolean parse(String uri, long version, String text) {
     if (!isLatestVersion(uri, version)) {
@@ -535,8 +535,9 @@ public class Kind2LanguageServer
         parseResults.remove(uri);
         client.publishDiagnostics(new PublishDiagnosticsParams(uri, new ArrayList<>()));
       }
-      throw new ResponseErrorException(
-          new ResponseError(ResponseErrorCode.ParseError, e.getMessage(), e));
+      client.showMessage(getFatalErrorMessage(e));
+      // The client still shows the old components, so have it update them.
+      return true;
     }
 
     List<Diagnostic> diagnostics = new ArrayList<>();
